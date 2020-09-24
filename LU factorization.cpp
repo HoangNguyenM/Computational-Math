@@ -1,3 +1,6 @@
+// This program is used to perform LU factorization of an input matrix
+// algorithms for no pivoting, partial pivoting and complete pivoting are included
+
 #include <iostream>
 #include <iostream>
 #include <fstream>
