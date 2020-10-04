@@ -1,3 +1,7 @@
+// Containing algorithms using (preconditioned) steepest descent and (preconditioned) conjugate gradient to solve symmetric positive definite matrix problems
+// Included some specific conditioners for these algorithms such as Jacobi's preconditioner, Symmetric Gauss-Seidel preconditioner and tridiagonal preconditioner
+
+
 #include <iostream>
 #include <iostream>
 #include <fstream>
