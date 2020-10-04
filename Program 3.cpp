@@ -1,0 +1,584 @@
+#include <iostream>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <math.h>
+#include <stdio.h>
+#include <random>
+#include <chrono>
+#include <time.h>
+#include <sstream>
+#include <string>
+
+using namespace std;
+
+// n is the size of matrix A and M, k1, k2 are the numbers of subdiagonals and superdiagonals of A and M respectively
+// type reflects the type of preconditioner, which is explained in the function "solve"
+// if error_type = true, true solution x is known, true error is used, if error_type = false, true solution x is unknown, residual is used
+// change these values in the main program at the bottom
+int n;
+int k1;
+int k2;
+int type;
+double accuracy;
+vector<double> b = {};
+bool error_type;
+vector<double> true_x = {};
+
+// the following U and L are used to store the LU factorization of preconditioner M
+// we will only use this LU for tridiagonal M
+vector<vector<double>> U = {};
+vector<vector<double>> L = {};
+
+// define a function to generate a vector of size "count" following uniform distribution [d1, d2]
+vector<double> create(int d1, int d2, int count)
+{
+	default_random_engine generator;
+	uniform_real_distribution<double> distribution(d1, d2);
+	vector<double> vec = {};
+	for (int j = 0; j < count; j++)
+	{
+		generator.seed(chrono::system_clock::now().time_since_epoch().count());
+		vec.push_back(distribution(generator));
+	}
+	return vec;
+}
+
+// input a matrix from a file as a vector with length n * (k + 1)
+vector<vector<double>> get_matrix(string filename, int k)
+{
+	vector<vector<double>> mat = {};
+
+	ifstream file1(filename);
+	// read mat from the file
+	for (int i = 0; i < n; i++)
+	{
+		// read the first row of the matrix into vec
+		vector<double> vec = {};
+		// First case: we can read k + 1 elements in row i starting from the diagonal of the matrix
+		if (i + k + 1 <= n)
+		{
+			// read k + 1 nonzeros elements in row i
+			for (int j = 0; j < k + 1; j++)
+			{
+				string temp;
+				getline(file1, temp, ',');
+				vec.push_back(stod(temp));
+			}
+			// skip the next n - k elements, first check if i is the last row
+			if (i != n - 1)
+			{
+				for (int j = 0; j < n - k; j++)
+				{
+					string temp;
+					getline(file1, temp, ',');
+				}
+			}
+		}
+		// Second case: there are not enough k + 1 elements starting from the diagonal in row i of the matrix
+		else
+		{
+			// read n- i nonzero elements till the end of the line of the matrix
+			for (int j = 0; j < n - i; j++)
+			{
+				string temp;
+				getline(file1, temp, ',');
+				vec.push_back(stod(temp));
+			}
+			// skip i + 1 elements in the next row, first check if i is the last row
+			if (i != n - 1)
+			{
+				for (int j = 0; j < i + 1; j++)
+				{
+					string temp;
+					getline(file1, temp, ',');
+				}
+			}
+		}
+		mat.push_back(vec);
+	}
+	file1.close();
+	return mat;
+}
+
+// This function is used to make 2x2 diagonal blocks matrix from A
+vector<vector<double>> get_2x2_blocks(vector<vector<double>> A)
+{
+	vector<vector<double>> M = {};
+	for (int i = 0; i < n / 2; i++)
+	{
+		vector<double> vec = {};
+		vec.push_back(A[2 * i][0]);
+		vec.push_back(A[2 * i][1]);
+		M.push_back(vec);
+		vec = {};
+		vec.push_back(A[2 * i][1]);
+		vec.push_back(A[2 * i + 1][0]);
+		M.push_back(vec);
+	}
+	return M;
+}
+
+// This function performs inplace LU factorization on M
+// notice that in the end result, L will be stored as its transpose to maintain our convention of storing only upper triangular matrices
+void tridiagonal(vector<vector<double>> M)
+{
+	U.push_back(M[0]);
+	for (int i = 0; i < n - 1; i++)
+	{
+		L.push_back({ 1 });
+		double temp = M[i][1] / M[i][0];
+		L[i].push_back(temp);
+		U.push_back({ M[i + 1][0] - temp * M[i][1] });
+		if (i != n - 2)
+		{
+			U[i + 1].push_back(M[i + 1][1]);
+		}
+	}
+	L.push_back({ 1 });
+}
+
+// This function is used to obtain C transpose in M=C*transpose(C) where M is SGS preconditioner
+vector<vector<double>> SGS(vector<vector<double>> A)
+{
+	vector<vector<double>> Ctrans = {};
+	// compute transpose(C) = D^(-1/2)*(D-transpose(L)), D-transpose(L) is simply the upper part including the diagonal of A
+	// transpose(C) has exactly the same structure as the way we store A
+	for (int i = 0; i < n; i++)
+	{
+		vector<double> vec = {};
+		for (int j = 0; j < A[i].size(); j++)
+		{
+			double temp = A[i][j] / sqrt(A[i][0]);
+			vec.push_back(temp);
+		}
+		Ctrans.push_back(vec);
+	}
+	return Ctrans;
+}
+
+// generate a vector in the interval [0,1]
+// if m is true then read the vector from a file, if m is false then create random vector
+vector<double> get_vec(string filename, bool m)
+{
+	vector<double> vec = {};
+	if (m == false)
+	{
+		ofstream file;
+		file.open(filename, ios::out);
+		vec = create(0, 1, n);
+
+		for (int i = 0; i < n; i++)
+		{
+			file << vec[i] << "\n";
+		}
+		file.close();
+	}
+	else
+	{
+		ifstream file(filename);
+		for (int i = 0; i < n; i++)
+		{
+			double temp = 0;
+			file >> temp;
+			vec.push_back(temp);
+		}
+		file.close();
+	}
+	return vec;
+}
+
+// perform matrix vector multiplication, assuming the matrix is symmetric
+vector<double> product(vector<vector<double>> mat, vector<double> v, int k)
+{
+	vector<double> vec = {};
+	for (int i = 0; i < n; i++)
+	{
+		double temp = 0;
+		// Consider the first i elements
+		if (i <= k)
+		{
+			if (i != 0)
+			{
+				for (int j = 0; j < i; j++)
+				{
+					temp = temp + mat[j][i - j] * v[j];
+				}
+			}
+		}
+		else
+		{
+			for (int j = 0; j < k; j++)
+			{
+				temp = temp + mat[i - k + j][k - j] * v[i - k + j];
+			}
+		}
+		// Now consider the rest of elements
+		for (int j = 0; j < mat[i].size(); j++)
+		{
+			temp = temp + mat[i][j] * v[i + j];
+		}
+		vec.push_back(temp);
+	}
+	return vec;
+}
+
+// this function performs vector's sum
+vector<double> add(vector<double> vec1, vector<double> vec2)
+{
+vector<double> vec = {};
+for (int i = 0; i < n; i++)
+{
+	double temp = vec1[i] + vec2[i];
+	vec.push_back(temp);
+}
+return vec;
+}
+
+// this function performs vector's subtraction
+vector<double> subtract(vector<double> vec1, vector<double> vec2)
+{
+	vector<double> vec = {};
+	for (int i = 0; i < n; i++)
+	{
+		double temp = vec1[i] - vec2[i];
+		vec.push_back(temp);
+	}
+	return vec;
+}
+
+// this function performs vector's multiplication with a constant
+vector<double> multiply(vector<double> vec1, double constant)
+{
+	vector<double> vec = {};
+	for (int i = 0; i < n; i++)
+	{
+		double temp = vec1[i] * constant;
+		vec.push_back(temp);
+	}
+	return vec;
+}
+
+// perform vector vector inner product
+double inner(vector<double> vec1, vector<double> vec2)
+{
+	double temp = 0;
+	for (int i = 0; i < n; i++)
+	{
+		temp = temp + vec1[i] * vec2[i];
+	}
+	return temp;
+}
+
+// calculate the 2-norm of a vector
+double norm(vector<double> vec)
+{
+	double temp = 0;
+	for (int i = 0; i < n; i++)
+	{
+		temp = temp + vec[i] * vec[i];
+	}
+	return sqrt(temp);
+}
+
+// Forward solve the equation Lx = b, because of the way we store every symmetric matrix as an upper triangular matrix
+// we will assume that the input L here is stored as its transpose, i.e. an upper triangular matrix
+vector<double> forward(vector<vector<double>> L, vector<double> v)
+{
+	vector<double> vec = {};
+	// solve the first element of the vector
+	double temp = v[0] / L[0][0];
+	vec.push_back(temp);
+	// solve the rest of the elements
+	for (int i = 1; i < n; i++)
+	{
+		temp = v[i];
+		for (int j = 1; j < L[n - 1 - i].size(); j++)
+		{
+			temp = temp - L[i - j][j] * vec[i - j];
+		}
+		temp = temp / L[i][0];
+		vec.push_back(temp);
+	}
+	return vec;
+}
+
+// Backward solve the equation Ux = b
+vector<double> backward(vector<vector<double>> U, vector<double> v)
+{
+	vector<double> vec = {};
+	// solve the last element of the vector
+	double temp = v[n - 1] / U[n - 1][0];
+	vec.push_back(temp);
+	// solve the rest of the elements
+	for (int i = n - 2; i >= 0; i--)
+	{
+		temp = v[i];
+		for (int j = U[i].size() - 1; j >= 1; j--)
+		{
+			temp = temp - U[i][j] * vec[n - 1 - i - j];
+		}
+		temp = temp / U[i][0];
+		vec.push_back(temp);
+	}
+	vector<double> vec1 = {};
+	// reverse the order of the vector
+	for (int i = 0; i < n; i++)
+	{
+		vec1.push_back(vec[n - i - 1]);
+	}
+	return vec1;
+}
+
+// this function solves Mz = r
+vector<double> solve(vector<vector<double>> M, vector<double> r)
+{
+	vector<double> vec = {};
+	// type 1: M is diagonal matrix
+	if (type == 1)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			vec.push_back(r[i] / M[i][0]);
+		}
+	}
+	// type 2: M is 2x2 diagonal blocks matrix
+	else if (type == 2)
+	{
+		for (int i = 0; i < n / 2; i++)
+		{
+			double temp = (r[2 * i] * M[2 * i + 1][1] - r[2 * i + 1] * M[2 * i][1]) / (M[2 * i][0] * M[2 * i + 1][1] - M[2 * i][1] * M[2 * i][1]);
+			vec.push_back(temp);
+			vec.push_back((r[2 * i] - M[2 * i][0] * temp) / M[2 * i][1]);
+		}
+	}
+	// type 3: M is SGS preconditioner
+	else if (type == 3)
+	{
+		vec = forward(M, r);
+		vec = backward(M, vec);
+	}
+	// type 4: M is tridiagonal
+	else if (type == 4)
+	{
+		vec = forward(L, r);
+		vec = backward(U, r);
+	}
+	return vec;
+}
+
+// perform PSD
+void PSD(vector<vector<double>> A, vector<vector<double>> M, vector<double> b, vector<double> x, bool precondition, bool stationary)
+{
+	// create a random guess x0 and calculate the initial value for r and z
+	vector<double> r = subtract(b, product(A, x, k1));
+	vector<double> z = {};
+	if (precondition == true)
+	{
+		z = solve(M, r);
+	}
+	else
+	{
+		z = r;
+	}
+	vector<double> w = {};
+	// change alpha here if the method is stationary:
+	double alpha = 0.1;
+	int count = 0;
+
+	// save the error in variable "test", use the first line below for true error, use the second line for residual
+	double test = 0;
+	if (error_type == true)
+	{
+		test = norm(subtract(x, true_x)) / norm(true_x);
+	}
+	else
+	{
+		test = norm(r) / norm(b);
+	}
+	cout << "The initial test value is: ";
+	cout << test << "\n";
+
+	// perform PSD, loop until we reach desired accuracy
+	while (test > accuracy)
+	{
+		w = product(A, z, k1);
+		// update alpha if not stationary
+		if (stationary == false)
+		{
+			alpha = inner(z, r) / inner(z, w);
+		}
+		x = add(x, multiply(z, alpha));
+		r = subtract(r, multiply(w, alpha));
+		if (precondition == true)
+		{
+			z = solve(M, r);
+		}
+		else
+		{
+			z = r;
+		}
+		// update error variable, use the first line below for true error, use the second line for residual
+		if (error_type == true)
+		{
+			test = norm(subtract(x, true_x)) / norm(true_x);
+		}
+		else
+		{
+			test = norm(r) / norm(b);
+		}
+
+		count = count + 1;
+	}
+	cout << count << " loops were performed\n";
+	cout << "Final test value is: " << test << "\n";
+	cout << "Final vector x is: \n";
+	for (int i = 0; i < n; i++)
+	{
+		cout << x[i] << "\n";
+	}
+	cout << "\n";
+}
+
+// perform PCG
+void PCG(vector<vector<double>> A, vector<vector<double>> M, vector<double> b, vector<double> x, bool precondition)
+{
+	// create a random guess x0 and calculate the initial value for r, z and p
+	vector<double> r = subtract(b, product(A, x, k1));
+	vector<double> z = {};
+	if (precondition == true)
+	{
+		z = solve(M, r);
+	}
+	else
+	{
+		z = r;
+	}
+	vector<double> p = z;
+	vector<double> v = {};
+	double alpha = 1;
+	double beta = 1;
+	int count = 0;
+
+	// save the error in variable "test", use the first line below for true error, use the second line for residual
+	double test = 0;
+	if (error_type == true)
+	{
+		test = norm(subtract(x, true_x)) / norm(true_x);
+	}
+	else
+	{
+		test = norm(r) / norm(b);
+	}
+	cout << "The initial test value is: ";
+	cout << test << "\n";
+
+	// perform PSD, loop until we reach desired accuracy
+	while (test > accuracy)
+	{
+		v = product(A, p, k1);
+		alpha = inner(r, z) / inner(p, v);
+		x = add(x, multiply(p, alpha));
+		// save the inner product of r and z to calculate beta later before updating r and z
+		double temp = inner(r, z);
+		r = subtract(r, multiply(v, alpha));
+		if (precondition == true)
+		{
+			z = solve(M, r);
+		}
+		else
+		{
+			z = r;
+		}
+		beta = inner(r, z) / temp;
+		p = add(z, multiply(p, beta));
+
+		// update error variable, use the first line below for true error, use the second line for residual
+		if (error_type == true)
+		{
+			test = norm(subtract(x, true_x)) / norm(true_x);
+		}
+		else
+		{
+			test = norm(r) / norm(b);
+		}
+		count = count + 1;
+	}
+	cout << count << " loops were performed\n";
+	cout << "Final test value is: " << test << "\n";
+	cout << "Final vector x is: \n";
+	for (int i = 0; i < n; i++)
+	{
+		cout << x[i] << "\n";
+	}
+	cout << "\n";
+
+}
+
+int main()
+{
+	// change n and accuracy as desire
+	// type reflects type of preconditioner M
+	// type 1: diagonal matrix, type 2: 2x2 blocks matrix, type 3: SGS preconditioner, type 4: tridiagonal matrix
+	// Change these values here
+	// k1 is used for A, k2 is used for M
+	n = 8;
+	k1 = 1;
+	k2 = 0;
+	type = 1;
+	error_type = false;
+	accuracy = pow(10, -20);
+
+	// get matrix A, M, vector b and initial guess x0
+	vector<vector<double>> A = get_matrix("A.csv", k1);
+
+	// get_vec true if read b from a file, get_vec false if create random b, same for x0
+	vector<double> b = get_vec("b.csv", true);
+	vector<double> x0 = get_vec("x0.csv", true);
+
+	// run the following line if true solution x is known
+	if (error_type == true)
+	{
+		true_x = get_vec("x.csv", true);
+	}
+
+	// input M
+	vector<vector<double>> M = {};
+	// general banded M from A, here I only use k2 = 0, i.e. M diagonal matrix
+	if (type == 1)
+	{
+		M = get_matrix("A.csv", k2);
+	}
+	// 2x2 blocks matrix M from A
+	if (type == 2)
+	{
+		M = get_2x2_blocks(A);
+	}
+	// use the following line for SGS preconditioner M, for this form we will save C transpose instead, notice that this variable M will be transpose C = D^(-1/2)*(D-transpose(L))
+	if (type == 3)
+	{
+		M = SGS(A);
+	}
+	// tridiagonal preconditioner M, k2 = 1
+	if (type == 4)
+	{
+		M = get_matrix("A.csv", k2);
+		tridiagonal(M);
+	}
+
+	cout << "Stationary mode PSD, no preconditioning:\n";
+	PSD(A, M, b, x0, false, true);
+	
+	cout << "SD, no preconditioning:\n";
+	PSD(A, M, b, x0, false, false);
+
+	cout << "PSD with preconditioning:\n";
+	PSD(A, M, b, x0, true, false);
+
+	cout << "CG, no preconditioning:\n";
+	PCG(A, M, b, x0, false);
+
+	cout << "PCG with preconditioning:\n";
+	PCG(A, M, b, x0, true);
+
+}
