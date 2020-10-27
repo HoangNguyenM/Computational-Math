@@ -1,3 +1,6 @@
+// This program performs a cubic spline interpolation
+// Notice that there is an intermediate step that needs solver tool to find the solution to AX = b that can be found in "solver" file
+
 #include <iostream>
 #include <fstream>
 #include <vector>
