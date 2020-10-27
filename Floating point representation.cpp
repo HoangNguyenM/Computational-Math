@@ -1,3 +1,7 @@
+// This program contains C++ code on floating point system representation
+// including constructing mathematical operators on floating points such as translation from real numbers to floating points, rounding, addition, accumulation
+// perform error tests on the above operations and error bound
+
 #include <iostream>
 #include <math.h>
 #include <stdlib.h>
