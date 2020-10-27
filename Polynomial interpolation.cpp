@@ -1,3 +1,6 @@
+// This program includes some polynomial interpolation methods including Barycentric form 1, Barycentric form 2 and Newton form on different types of mesh points
+// The program also includes some examples of certain given functions
+
 #include <iostream>
 #include <fstream>
 #include <vector>
