@@ -1,3 +1,6 @@
+// This program includes some iterative methods for solving a family of ODE
+// The methods include Adams Bashforth two-step, four-stage explicit Runge Kutta, Adams Moulton one-step, Backward differentiation formula two-step
+
 #include <iostream>
 #include <fstream>
 #include <vector>
