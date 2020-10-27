@@ -1,3 +1,6 @@
+// This program includes some quadrature methods including Composite Trapezoidal rule, Composite Midpoint rule and Two-point Gauss-Legendre method
+// Also includes the errors on some example functions
+
 #include <iostream>
 #include <fstream>
 #include <vector>
